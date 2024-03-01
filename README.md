@@ -1,5 +1,6 @@
 # com.walmartlabs/lacinia-pedestal
-
+this is a fork to work with cloboss. you probably don't want to use this. it is
+pending profiling.
 [![Clojars Project](https://img.shields.io/clojars/v/com.walmartlabs/lacinia-pedestal.svg)](https://clojars.org/com.walmartlabs/lacinia-pedestal)
 [![CI](https://github.com/walmartlabs/lacinia-pedestal/actions/workflows/config.yml/badge.svg)](https://github.com/walmartlabs/lacinia-pedestal/actions/workflows/config.yml)
 [![API DOCS](https://cljdoc.org/badge/com.walmartlabs/lacinia-pedestal)](https://cljdoc.org/d/com.walmartlabs/lacinia-pedestal)
@@ -27,11 +28,11 @@ generate a service, then invoke `io.pedestal.http/create-server` and `/start`.
             [com.walmartlabs.lacinia.schema :as schema]
             [com.walmartlabs.lacinia.util :as util]))
 
-(def hello-schema 
-  (-> {:objects 
+(def hello-schema
+  (-> {:objects
         {:Query
          {:fields
-            ;; String is quoted here; in EDN the quotation is not required 
+            ;; String is quoted here; in EDN the quotation is not required
             ;; You could also use :String
             {:hello {:type 'String}}}}}
        (util/inject-resolvers {:Query/hello (constantly "hello")})
@@ -74,7 +75,7 @@ the compiled schema based on the latest code you've loaded into the REPL.
 
 `default-service` is intentionally limited, and exists only to help you get started.
 Once you start adding anything more complicated, such as authentication, or supporting
-multiple schemas (or schema versions) at different paths, 
+multiple schemas (or schema versions) at different paths,
 you will want to simply create your routes and server in your own code,
 using the building-blocks provided by `com.walmartlabs.lacinia.pedestal2`.
 
@@ -84,10 +85,10 @@ The GraphiQL packaged inside the library is built using `npm`, from
 version `1.7.1`.
 
 If you are including lacinia-pedestal via Git coordinate (rather than a published version
-of the library by using a :mvn/version coordinate), then the library will need to be prepped for use 
+of the library by using a :mvn/version coordinate), then the library will need to be prepped for use
 via `clj -X:deps prep`.
- 
-The prep action for lacinia-pedestal requires that you have `npm` installed.  
+
+The prep action for lacinia-pedestal requires that you have `npm` installed.
 The prep action generates the CSS and JavaScript files that are used
 to execute GraphiQL.
 
