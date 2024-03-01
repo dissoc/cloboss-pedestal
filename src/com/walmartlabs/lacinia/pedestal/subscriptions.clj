@@ -1,62 +1,60 @@
-; Copyright (c) 2017-present Walmart, Inc.
-;
-; Licensed under the Apache License, Version 2.0 (the "License")
-; you may not use this file except in compliance with the License.
-; You may obtain a copy of the License at
-;
-;     http://www.apache.org/licenses/LICENSE-2.0
-;
-; Unless required by applicable law or agreed to in writing, software
-; distributed under the License is distributed on an "AS IS" BASIS,
-; WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-; See the License for the specific language governing permissions and
-; limitations under the License.
+;; Copyright (c) 2017-present Walmart, Inc.
+;;
+;; Licensed under the Apache License, Version 2.0 (the "License")
+;; you may not use this file except in compliance with the License.
+;; You may obtain a copy of the License at
+;;
+;;     http://www.Apache.org/licenses/LICENSE-2.0
+;;
+;; Unless required by applicable law or agreed to in writing, software
+;; distributed under the License is distributed on an "AS IS" BASIS,
+;; WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+;; See the License for the specific language governing permissions and
+;; limitations under the License.
 
 (ns com.walmartlabs.lacinia.pedestal.subscriptions
   "Support for GraphQL subscriptions using Jetty WebSockets, following the design
   of the Apollo client and server."
   {:added "0.3.0"}
   (:require
-    [com.walmartlabs.lacinia :as lacinia]
-    [com.walmartlabs.lacinia.util :as util]
-    [com.walmartlabs.lacinia.internal-utils :refer [cond-let to-message]]
-    [clojure.core.async :as async
-     :refer [chan put! close! go-loop <! >! alt! thread]]
-    [cheshire.core :as cheshire]
-    [io.pedestal.interceptor :refer [interceptor]]
-    [io.pedestal.interceptor.chain :as chain]
-    [io.pedestal.http.jetty.websockets :as ws]
-    [io.pedestal.log :as log]
-    [com.walmartlabs.lacinia.parser :as parser]
-    [com.walmartlabs.lacinia.validator :as validator]
-    [com.walmartlabs.lacinia.executor :as executor]
-    [com.walmartlabs.lacinia.constants :as constants]
-    [com.walmartlabs.lacinia.resolve :as resolve]
-    [clojure.string :as str]
-    [clojure.spec.alpha :as s]
-    [com.walmartlabs.lacinia.selection :as selection]
-    [com.walmartlabs.lacinia.pedestal.spec :as spec]
-    [com.walmartlabs.lacinia.pedestal.interceptors :as interceptors])
-  (:import
-    (org.eclipse.jetty.websocket.api UpgradeResponse)))
+   [com.walmartlabs.lacinia :as lacinia]
+   [com.walmartlabs.lacinia.util :as util]
+   [cloboss.web.async :refer [as-channel send!]]
+   [com.walmartlabs.lacinia.internal-utils :refer [cond-let to-message]]
+   [clojure.core.async :as async
+    :refer [chan put! close! go-loop <! >! alt! thread]]
+   [cheshire.core :as cheshire]
+   [io.pedestal.interceptor :refer [interceptor]]
+   [io.pedestal.interceptor.chain :as chain]
+   [io.pedestal.log :as log]
+   [com.walmartlabs.lacinia.parser :as parser]
+   [com.walmartlabs.lacinia.validator :as validator]
+   [com.walmartlabs.lacinia.executor :as executor]
+   [com.walmartlabs.lacinia.constants :as constants]
+   [com.walmartlabs.lacinia.resolve :as resolve]
+   [clojure.string :as str]
+   [clojure.spec.alpha :as s]
+   [com.walmartlabs.lacinia.selection :as selection]
+   [com.walmartlabs.lacinia.pedestal.spec :as spec]
+   [com.walmartlabs.lacinia.pedestal.interceptors :as interceptors]))
 
 (when (-> *clojure-version* :minor (< 9))
   (require '[clojure.future :refer [pos-int?]]))
 
 (defn ^:private xform-channel
-  [input-ch output-ch xf]
+  [input-ch output-ch xf send-fn]
   (go-loop []
     (if-some [input (<! input-ch)]
       (let [output (xf input)]
-        (when (>! output-ch output)
-          (recur)))
+        (send-fn output-ch output)
+        (recur))
       (close! output-ch))))
 
 (defn ^:private response-encode-loop
   "Takes values from the input channel, encodes them as a JSON string, and
   puts them into the output-ch."
-  [input-ch output-ch]
-  (xform-channel input-ch output-ch cheshire/generate-string))
+  [input-ch output-ch send-fn]
+  (xform-channel input-ch output-ch cheshire/generate-string send-fn))
 
 (defn ^:private ws-parse-loop
   "Parses text messages sent from the client into Clojure data with keyword keys,
@@ -127,12 +125,12 @@
         ws-data-ch
         ([data]
          (if (nil? data)
-            ;; When the client closes the connection, any running subscriptions need to
-            ;; shutdown and cleanup.
+           ;; When the client closes the connection, any running subscriptions need to
+           ;; shutdown and cleanup.
            (do
              (log/trace :event ::client-close)
              (run! close! (-> connection-state :subs vals)))
-            ;; Otherwise it's a message from the client to be acted upon.
+           ;; Otherwise it's a message from the client to be acted upon.
            (let [{:keys [id payload type]} data]
              (case type
                "connection_init"
@@ -163,7 +161,7 @@
                (do
                  (log/trace :event ::terminate :id id)
                  (run! close! (-> connection-state :subs vals))
-                  ;; This shuts down the connection entirely.
+                 ;; This shuts down the connection entirely.
                  (close! response-data-ch))
 
                ;; Not recognized!
@@ -204,50 +202,50 @@
 (defn ^:private construct-exception-payload
   [^Throwable t]
   (cond-let
-    :let [errors (->> t
-                      ex-data-seq
-                      (keep ::errors)
-                      first)
-          parse-errors (->> errors
-                            (keep :message)
-                            distinct)
-          locations (->> (mapcat :locations errors)
-                         (remove nil?)
-                         distinct
-                         seq)]
+   :let [errors (->> t
+                     ex-data-seq
+                     (keep ::errors)
+                     first)
+         parse-errors (->> errors
+                           (keep :message)
+                           distinct)
+         locations (->> (mapcat :locations errors)
+                        (remove nil?)
+                        distinct
+                        seq)]
 
-    (seq parse-errors)
-    (cond-> {:message (str "Failed to parse GraphQL query. "
-                           (->> parse-errors
-                                (keep fix-up-message)
-                                (str/join "; "))
-                           ".")}
-      locations (assoc :locations locations))
+   (seq parse-errors)
+   (cond-> {:message (str "Failed to parse GraphQL query. "
+                          (->> parse-errors
+                               (keep fix-up-message)
+                               (str/join "; "))
+                          ".")}
+     locations (assoc :locations locations))
 
-    ;; Apollo spec only has room for one error, so just use the first
+   ;; Apollo spec only has room for one error, so just use the first
 
-    (seq errors)
-    (cond-> (first errors)
-      locations (assoc :locations locations))
+   (seq errors)
+   (cond-> (first errors)
+     locations (assoc :locations locations))
 
-    :else
-    ;; Strip off the exception added by Pedestal and convert
-    ;; the message into an error map
-    (cond-> {:message (to-message t)}
-      locations (assoc :locations locations))))
+   :else
+   ;; Strip off the exception added by Pedestal and convert
+   ;; the message into an error map
+   (cond-> {:message (to-message t)}
+     locations (assoc :locations locations))))
 
 (def exception-handler-interceptor
   "An interceptor that implements the :error callback, to send an \"error\" message to the client."
   (interceptor
-    {:name ::exception-handler
-     :error (fn [context ^Throwable t]
-              (let [{:keys [id response-data-ch]} (:request context)
-                    ;; Strip off the wrapper exception added by Pedestal
-                    payload (construct-exception-payload (.getCause t))]
-                (put! response-data-ch {:type :error
-                                        :id id
-                                        :payload payload})
-                (close! response-data-ch)))}))
+   {:name ::exception-handler
+    :error (fn [context ^Throwable t]
+             (let [{:keys [id response-data-ch]} (:request context)
+                   ;; Strip off the wrapper exception added by Pedestal
+                   payload (construct-exception-payload (.getCause t))]
+               (put! response-data-ch {:type :error
+                                       :id id
+                                       :payload payload})
+               (close! response-data-ch)))}))
 
 (def send-operation-response-interceptor
   "Interceptor responsible for the :response key of the context (set when a request
@@ -255,17 +253,17 @@
   is packaged up as the payload of a \"data\" message to the client,
   followed by a \"complete\" message."
   (interceptor
-    {:name ::send-operation-response
-     :leave (fn [context]
-              (when-let [response (:response context)]
-                (let [{:keys [id response-data-ch]} (:request context)]
-                  (put! response-data-ch {:type :data
-                                          :id id
-                                          :payload response})
-                  (put! response-data-ch {:type :complete
-                                          :id id})
-                  (close! response-data-ch)))
-              context)}))
+   {:name ::send-operation-response
+    :leave (fn [context]
+             (when-let [response (:response context)]
+               (let [{:keys [id response-data-ch]} (:request context)]
+                 (put! response-data-ch {:type :data
+                                         :id id
+                                         :payload response})
+                 (put! response-data-ch {:type :complete
+                                         :id id})
+                 (close! response-data-ch)))
+             context)}))
 
 (defn ^:private on-leave-query-parser
   [context]
@@ -291,27 +289,27 @@
   that returns the compiled schema."
   [compiled-schema]
   (interceptor
-    {:name ::query-parser
-     :enter (fn [context]
-              (let [{operation-name :operationName
-                     :keys [query variables]} (:request context)
-                    actual-schema (if (map? compiled-schema)
-                                    compiled-schema
-                                    (compiled-schema))
-                    parsed-query (try
-                                   (parser/parse-query actual-schema query operation-name)
-                                   (catch Throwable t
-                                     (throw (ex-info (to-message t)
-                                                     {::errors (-> t ex-data :errors)}
-                                                     t))))
-                    prepared (parser/prepare-with-query-variables parsed-query variables)
-                    errors (validator/validate actual-schema prepared {})]
+   {:name ::query-parser
+    :enter (fn [context]
+             (let [{operation-name :operationName
+                    :keys [query variables]} (:request context)
+                   actual-schema (if (map? compiled-schema)
+                                   compiled-schema
+                                   (compiled-schema))
+                   parsed-query (try
+                                  (parser/parse-query actual-schema query operation-name)
+                                  (catch Throwable t
+                                    (throw (ex-info (to-message t)
+                                                    {::errors (-> t ex-data :errors)}
+                                                    t))))
+                   prepared (parser/prepare-with-query-variables parsed-query variables)
+                   errors (validator/validate actual-schema prepared {})]
 
-                (if (seq errors)
-                  (throw (ex-info "Query validation errors." {::errors errors}))
-                  (assoc-in context [:request :parsed-lacinia-query] prepared))))
-     :leave on-leave-query-parser
-     :error on-error-query-parser}))
+               (if (seq errors)
+                 (throw (ex-info "Query validation errors." {::errors errors}))
+                 (assoc-in context [:request :parsed-lacinia-query] prepared))))
+    :leave on-leave-query-parser
+    :error on-error-query-parser}))
 
 (defn ^:private execute-operation
   [context parsed-query]
@@ -319,8 +317,8 @@
     (-> context
         (get-in [:request :lacinia-app-context])
         (assoc
-          ::lacinia/connection-params (:connection-params context)
-          constants/parsed-query-key parsed-query)
+         ::lacinia/connection-params (:connection-params context)
+         constants/parsed-query-key parsed-query)
         executor/execute-query
         (resolve/on-deliver! (fn [response]
                                (put! ch (assoc context :response response))))
@@ -340,16 +338,16 @@
                           (nil? value)
                           (close! source-stream-ch)
 
-                           (resolve/is-resolver-result? value)
-                           (resolve/on-deliver! value accept-value)
+                          (resolve/is-resolver-result? value)
+                          (resolve/on-deliver! value accept-value)
 
                           :else
                           (put! source-stream-ch value)))
         app-context (-> context
                         (get-in [:request :lacinia-app-context])
                         (assoc
-                          ::lacinia/connection-params (:connection-params context)
-                          constants/parsed-query-key parsed-query))
+                         ::lacinia/connection-params (:connection-params context)
+                         constants/parsed-query-key parsed-query))
         ;; A streamer *must* succeed and return a cleanup function.  If there's a problem with the arguments,
         ;; it may pass the source-stream a ResolverResult that wraps an error.
         cleanup-fn (executor/invoke-streamer app-context source-stream)
@@ -423,14 +421,14 @@
   "Executes a mutation or query operation and sets the :response key of the context,
   or executes a long-lived subscription operation."
   (interceptor
-    {:name ::execute-operation
-     :enter (fn [context]
-              (let [request (:request context)
-                    parsed-query (:parsed-lacinia-query request)
-                    operation-type (-> parsed-query parser/operations :type)]
-                (if (= operation-type :subscription)
-                  (execute-subscription context parsed-query)
-                  (execute-operation context parsed-query))))}))
+   {:name ::execute-operation
+    :enter (fn [context]
+             (let [request (:request context)
+                   parsed-query (:parsed-lacinia-query request)
+                   operation-type (-> parsed-query parser/operations :type)]
+               (if (= operation-type :subscription)
+                 (execute-subscription context parsed-query)
+                 (execute-operation context parsed-query))))}))
 
 (defn inject-app-context-interceptor
   "Adds a :lacinia-app-context key to the request, used when executing the query.
@@ -445,10 +443,10 @@
   {:added "0.14.0"}
   [app-context]
   (interceptor
-    {:name ::inject-app-context
-     :enter (interceptors/on-enter-app-context-interceptor app-context)
-     :leave interceptors/on-leave-app-context-interceptor
-     :error interceptors/on-error-app-context-interceptor}))
+   {:name ::inject-app-context
+    :enter (interceptors/on-enter-app-context-interceptor app-context)
+    :leave interceptors/on-leave-app-context-interceptor
+    :error interceptors/on-error-app-context-interceptor}))
 
 (defn default-subscription-interceptors
   "Processing of operation requests from the client is passed through interceptor pipeline.
@@ -487,7 +485,6 @@
    (query-parser-interceptor compiled-schema)
    (inject-app-context-interceptor app-context)
    execute-operation-interceptor])
-
 
 (defn listener-fn-factory
   "A factory for the function used to create a WS listener.
@@ -555,8 +552,8 @@
                                      ::values-chan-fn values-chan-fn}
                                     interceptors)]
     (log/trace :event ::configuring :keep-alive-ms keep-alive-ms)
-    (fn [req resp _ws-map]
-      (.setAcceptedSubProtocol ^UpgradeResponse resp "graphql-ws")
+    (fn [req] ;;[req resp _ws-map]
+      ;;(.setAcceptedSubProtocol ^UpgradeResponse resp "graphql-ws")
       (log/trace :event ::upgrade-requested)
       (let [response-data-ch (response-chan-fn)             ; server data -> client
             ws-text-ch (chan 1)                             ; client text -> server
@@ -565,17 +562,21 @@
                        (log/trace :event ::closed)
                        (close! response-data-ch)
                        (close! ws-data-ch))
-            base-context' (init-context base-context req resp)
-            on-connect (fn [_session send-ch]
+            base-context' (init-context base-context req)
+            on-connect (fn [_session send-ch send-fn]
                          (log/trace :event ::connected)
-                         (response-encode-loop response-data-ch send-ch)
+                         (response-encode-loop response-data-ch send-ch send-fn)
                          (ws-parse-loop ws-text-ch ws-data-ch response-data-ch)
                          (connection-loop keep-alive-ms ws-data-ch response-data-ch base-context'))]
-        (ws/make-ws-listener
-          {:on-connect (ws/start-ws-connection on-connect send-buffer-or-n)
-           :on-text #(put! ws-text-ch %)
-           :on-error #(log/error :event ::error :exception %)
-           :on-close on-close})))))
+        (as-channel req
+                    :on-open (fn [cloboss-ws-chan]
+                               (on-connect "cloboss-ws-session" cloboss-ws-chan send!))
+                    :on-close (fn [_ _]
+                                on-close)
+                    :on-message (fn [ch msg]
+                                  (put! ws-text-ch msg))
+                    :on-error (fn [ch throwable]
+                                (log/error :event ::error :exception throwable)))))))
 
 (s/fdef listener-fn-factory
   :args (s/cat :compiled-schema ::spec/compiled-schema

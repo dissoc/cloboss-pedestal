@@ -2,7 +2,7 @@
         com.walmartlabs/lacinia {:mvn/version "1.2.1"}
         com.fasterxml.jackson.core/jackson-core {:mvn/version "2.15.2"}
         io.pedestal/pedestal.service {:mvn/version "0.6.0"}
-        io.pedestal/pedestal.jetty {:mvn/version "0.6.0"}
+        org.cloboss/cloboss {:mvn/version "2.2.0-SNAPSHOT"}
         com.rpl/proxy-plus {:mvn/version "0.0.9"}}
  :paths ["src" "resources"]
  :deps/prep-lib {:alias :build
